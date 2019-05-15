@@ -149,23 +149,25 @@ boolean isApplicationActive() {
 }
 
 void eventLocation(NSEvent *theEvent, short *x, short *y) {
-    NSPoint event_location;
-    NSPoint local_point;
-    
-    event_location = [theEvent locationInWindow];
-    local_point = [theMainView convertPoint:event_location fromView:nil];
-    
-    NSRect frameRect = [theMainView.window contentRectForFrameRect:[theMainView.window frame]];
-    *x = COLS * local_point.x / frameRect.size.width;
-    *y = ROWS - ROWS * local_point.y / frameRect.size.height;
-    
-    // Correct for the fact that truncation occurs in a positive direction when we're below zero:
-    if (local_point.x < 0) {
-        (*x)--;
-    }
-    if (frameRect.size.height < local_point.y) {
-        (*y)--;
-    }
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        NSPoint event_location;
+        NSPoint local_point;
+        
+        event_location = [theEvent locationInWindow];
+        local_point = [theMainView convertPoint:event_location fromView:nil];
+        
+        NSRect frameRect = [theMainView.window contentRectForFrameRect:[theMainView.window frame]];
+        *x = COLS * local_point.x / frameRect.size.width;
+        *y = ROWS - ROWS * local_point.y / frameRect.size.height;
+        
+        // Correct for the fact that truncation occurs in a positive direction when we're below zero:
+        if (local_point.x < 0) {
+            (*x)--;
+        }
+        if (frameRect.size.height < local_point.y) {
+            (*y)--;
+        }
+    });
 }
 
 // Return true if the event is a mouse move event within the same cell.
@@ -206,7 +208,9 @@ void nextKeyOrMouseEvent(rogueEvent *returnEvent, __unused boolean textInput, bo
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
     
     NSEvent *theEvent = nil;
-	NSEventType theEventType = nil;
+	__block NSEventType theEventType = nil;
+    __block NSEventModifierFlags flags = nil;
+    __block NSString *eventCharacters = nil;
 	short x, y;
     
     for(;;) {
@@ -214,14 +218,23 @@ void nextKeyOrMouseEvent(rogueEvent *returnEvent, __unused boolean textInput, bo
         // nil the event or it will repeat (e.g. 'x' to explore will be pressed repeatedly).
         scene.aEvent = nil;
         
-        theEventType = [theEvent type];
-        if (theEventType == NSKeyDown && !([theEvent modifierFlags] & NSCommandKeyMask)) {
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            theEventType = [theEvent type];
+            flags = [theEvent modifierFlags];
+            if (theEventType == NSKeyDown) {
+                eventCharacters = [theEvent charactersIgnoringModifiers];
+            } else {
+                eventCharacters = nil;
+            }
+        });
+        
+        if (theEventType == NSKeyDown && !(flags & NSCommandKeyMask)) {
             returnEvent->eventType = KEYSTROKE;
-            returnEvent->param1 = [[theEvent charactersIgnoringModifiers] characterAtIndex:0];
+            returnEvent->param1 = [eventCharacters characterAtIndex:0];
             //printf("\nKey pressed: %i", returnEvent->param1);
             returnEvent->param2 = 0;
-            returnEvent->controlKey = ([theEvent modifierFlags] & NSControlKeyMask ? 1 : 0);
-            returnEvent->shiftKey = ([theEvent modifierFlags] & NSShiftKeyMask ? 1 : 0);
+            returnEvent->controlKey = (flags & NSControlKeyMask ? 1 : 0);
+            returnEvent->shiftKey = (flags & NSShiftKeyMask ? 1 : 0);
             break;
         } else if (theEventType == NSEventTypeLeftMouseDown
                    || theEventType == NSEventTypeLeftMouseUp
@@ -256,8 +269,8 @@ void nextKeyOrMouseEvent(rogueEvent *returnEvent, __unused boolean textInput, bo
             eventLocation(theEvent, &x, &y);
             returnEvent->param1 = x;
             returnEvent->param2 = y;
-            returnEvent->controlKey = ([theEvent modifierFlags] & NSControlKeyMask ? 1 : 0);
-            returnEvent->shiftKey = ([theEvent modifierFlags] & NSShiftKeyMask ? 1 : 0);
+            returnEvent->controlKey = (flags & NSControlKeyMask ? 1 : 0);
+            returnEvent->shiftKey = (flags & NSShiftKeyMask ? 1 : 0);
             mouseX = x;
             mouseY = y;
             break;
