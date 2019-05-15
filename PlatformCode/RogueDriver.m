@@ -367,7 +367,8 @@ short getHighScoresList(rogueHighScoresEntry returnList[HIGH_SCORES_COUNT]) {
 	datesArray = [[NSUserDefaults standardUserDefaults] arrayForKey:@"high scores dates"];
     
 	mostRecentDate = [NSDate distantPast];
-	dateFormatter = [[NSDateFormatter alloc] initWithDateFormat:@"%1m/%1d/%y" allowNaturalLanguage:YES];
+    dateFormatter = [[NSDateFormatter alloc] init];
+    [dateFormatter setDateFormat:@"%1m/%1d/%y"];
     
 	// store each value in order into returnList
 	for (i=0; i<HIGH_SCORES_COUNT; i++) {
