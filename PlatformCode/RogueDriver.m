@@ -92,7 +92,7 @@ static RogueScene *scene;
         NSSize screenSize = mainWindow.screen.frame.size;
         NSSize initalSize = NSMakeSize(screenSize.width * backingScaleFactor, screenSize.height * backingScaleFactor); // Total screen size, taking retina display into account
         
-        scene = [[RogueScene alloc] initWithSize:initalSize rows:ROWS cols: COLS];
+        scene = [[RogueScene alloc] initWithSize:initalSize rows:ROWS cols: COLS mainView: theMainView];
         scene.scaleMode = SKSceneScaleModeFill;
         // Present the scene.
         [skGameView presentScene:scene];
@@ -148,43 +148,25 @@ boolean isApplicationActive() {
     return [[NSRunningApplication currentApplication] isActive];
 }
 
-void eventLocation(NSEvent *theEvent, short *x, short *y) {
+// Return true if the last event is a mouse move event within the same cell.
+boolean discardEvent() {
+    __block NSEventType eventType;
+    __block int eventLocationX, eventLocationY;
     dispatch_sync(dispatch_get_main_queue(), ^{
-        NSPoint event_location;
-        NSPoint local_point;
-        
-        event_location = [theEvent locationInWindow];
-        local_point = [theMainView convertPoint:event_location fromView:nil];
-        
-        NSRect frameRect = [theMainView.window contentRectForFrameRect:[theMainView.window frame]];
-        *x = COLS * local_point.x / frameRect.size.width;
-        *y = ROWS - ROWS * local_point.y / frameRect.size.height;
-        
-        // Correct for the fact that truncation occurs in a positive direction when we're below zero:
-        if (local_point.x < 0) {
-            (*x)--;
-        }
-        if (frameRect.size.height < local_point.y) {
-            (*y)--;
-        }
+        eventType = scene.eventType;
+        eventLocationX = scene.eventLocationX;
+        eventLocationY = scene.eventLocationY;
     });
-}
-
-// Return true if the event is a mouse move event within the same cell.
-boolean discardEvent(NSEvent *theEvent) {
-    short x, y;
-    NSEventType theEventType = [theEvent type];
-    eventLocation(theEvent, &x, &y);
-    return (theEventType == NSEventTypeMouseMoved && x == mouseX && y == mouseY);
+    return (eventType == NSEventTypeMouseMoved && eventLocationY == mouseX && eventLocationY == mouseY);
 }
 
 // Returns true if the player interrupted the wait with a keystroke or mouse action; otherwise false.
 boolean pauseForMilliseconds(short milliseconds) {
     if (isApplicationActive()) {
         for (; milliseconds > 0; milliseconds -= 16) {
-            if (scene.aEvent) {
-                if (discardEvent(scene.aEvent)) {
-                    scene.aEvent = nil;
+            if (scene.validEvent) {
+                if (discardEvent()) {
+                    [scene clearEvent];
                 } else {
                     return YES;
                 }
@@ -198,7 +180,7 @@ boolean pauseForMilliseconds(short milliseconds) {
     } else {
         [NSThread sleepForTimeInterval:((double) milliseconds) / 1000];
     }
-    if (scene.aEvent) {
+    if (scene.validEvent) {
         return YES;
     }
     return NO;
@@ -207,44 +189,36 @@ boolean pauseForMilliseconds(short milliseconds) {
 void nextKeyOrMouseEvent(rogueEvent *returnEvent, __unused boolean textInput, boolean colorsDance) {
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
     
-    NSEvent *theEvent = nil;
-	__block NSEventType theEventType = nil;
-    __block NSEventModifierFlags flags = nil;
-    __block NSString *eventCharacters = nil;
-	short x, y;
-    
     for(;;) {
-        theEvent = [scene aEvent];
-        // nil the event or it will repeat (e.g. 'x' to explore will be pressed repeatedly).
-        scene.aEvent = nil;
-        
+        __block NSEventType eventType;
+        __block NSEventModifierFlags eventFlags;
+        __block NSString* eventCharacters;
+        __block int eventLocationX, eventLocationY;
         dispatch_sync(dispatch_get_main_queue(), ^{
-            theEventType = [theEvent type];
-            flags = [theEvent modifierFlags];
-            if (theEventType == NSKeyDown) {
-                eventCharacters = [theEvent charactersIgnoringModifiers];
-            } else {
-                eventCharacters = nil;
-            }
+            eventType = scene.eventType;
+            eventFlags = scene.eventFlags;
+            eventCharacters = scene.eventCharacters;
+            eventLocationX = scene.eventLocationX;
+            eventLocationY = scene.eventLocationY;
         });
-        
-        if (theEventType == NSKeyDown && !(flags & NSCommandKeyMask)) {
+        [scene clearEvent];
+        if (eventType == NSKeyDown && !(eventFlags & NSCommandKeyMask)) {
             returnEvent->eventType = KEYSTROKE;
             returnEvent->param1 = [eventCharacters characterAtIndex:0];
-            //printf("\nKey pressed: %i", returnEvent->param1);
+            //printf("\nKey pressed: %li", returnEvent->param1);
             returnEvent->param2 = 0;
-            returnEvent->controlKey = (flags & NSControlKeyMask ? 1 : 0);
-            returnEvent->shiftKey = (flags & NSShiftKeyMask ? 1 : 0);
+            returnEvent->controlKey = (eventFlags & NSControlKeyMask ? 1 : 0);
+            returnEvent->shiftKey = (eventFlags & NSShiftKeyMask ? 1 : 0);
             break;
-        } else if (theEventType == NSEventTypeLeftMouseDown
-                   || theEventType == NSEventTypeLeftMouseUp
-                   || theEventType == NSEventTypeRightMouseDown
-                   || theEventType == NSEventTypeRightMouseUp
-                   || theEventType == NSEventTypeMouseMoved
-                   || theEventType == NSEventTypeLeftMouseDragged
-                   || theEventType == NSEventTypeRightMouseDragged) {
-            
-            switch (theEventType) {
+        } else if (eventType == NSEventTypeLeftMouseDown
+                   || eventType == NSEventTypeLeftMouseUp
+                   || eventType == NSEventTypeRightMouseDown
+                   || eventType == NSEventTypeRightMouseUp
+                   || eventType == NSEventTypeMouseMoved
+                   || eventType == NSEventTypeLeftMouseDragged
+                   || eventType == NSEventTypeRightMouseDragged) {
+            //printf("\nMouse event at: %i, %i", eventLocationX, eventLocationY);
+            switch (eventType) {
                     // TODO: these const are depcrecated. Use new names.
                 case NSEventTypeLeftMouseDown:
                     returnEvent->eventType = MOUSE_DOWN;
@@ -264,15 +238,15 @@ void nextKeyOrMouseEvent(rogueEvent *returnEvent, __unused boolean textInput, bo
                     returnEvent->eventType = MOUSE_ENTERED_CELL;
                     break;
                 default:
+                    assert(false);
                     break;
             }
-            eventLocation(theEvent, &x, &y);
-            returnEvent->param1 = x;
-            returnEvent->param2 = y;
-            returnEvent->controlKey = (flags & NSControlKeyMask ? 1 : 0);
-            returnEvent->shiftKey = (flags & NSShiftKeyMask ? 1 : 0);
-            mouseX = x;
-            mouseY = y;
+            returnEvent->param1 = eventLocationX;
+            returnEvent->param2 = eventLocationY;
+            returnEvent->controlKey = (eventFlags & NSControlKeyMask ? 1 : 0);
+            returnEvent->shiftKey = (eventFlags & NSShiftKeyMask ? 1 : 0);
+            mouseX = eventLocationX;
+            mouseY = eventLocationY;
             break;
         } else {
             if (isApplicationActive()) {
@@ -287,8 +261,8 @@ void nextKeyOrMouseEvent(rogueEvent *returnEvent, __unused boolean textInput, bo
         }
     }
     
-    theEvent = nil;
-
+    assert(returnEvent->eventType != EVENT_ERROR);
+    
 	[pool drain];
 }
 

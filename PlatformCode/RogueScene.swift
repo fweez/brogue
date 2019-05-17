@@ -20,7 +20,16 @@ import GameplayKit
     
     fileprivate var cells = [[Cell]]()
     fileprivate var textureMap: [String : SKTexture] = [:]
-    @objc var aEvent: NSEvent?
+    var mainView: NSView
+    @objc var eventType: NSEvent.EventType
+    @objc var eventFlags: NSEvent.ModifierFlags
+    @objc var eventCharacters: String?
+    @objc var eventLocationX: Int
+    @objc var eventLocationY: Int
+    
+    @objc var validEvent: Bool {
+        return eventType != .applicationDefined
+    }
 
     // We don't want small letters scaled to huge proportions, so we only allow letters to stretch 
     // within a certain range (e.g. size of M +/- 20%)
@@ -32,12 +41,18 @@ import GameplayKit
         return min(self.cellWidth / calcBounds.width, self.cellHeight / calcBounds.height)
     }()
     
-    @objc public init(size: CGSize, rows: Int, cols: Int) {
+    @objc public init(size: CGSize, rows: Int, cols: Int, mainView: NSView) {
         initialSize = size
         self.rows = rows
         self.cols = cols
         cellWidth = CGFloat(size.width) / CGFloat(cols)
         cellHeight = CGFloat(size.height) / CGFloat(rows)
+        self.mainView = mainView
+        eventType = .applicationDefined // Ignored in RogueDriver
+        eventFlags = NSEvent.ModifierFlags.init()
+        eventCharacters = nil
+        eventLocationX = Int.max
+        eventLocationY = Int.max
         super.init(size: size)
         anchorPoint = NSMakePoint(0, 0)
     }
@@ -46,20 +61,50 @@ import GameplayKit
         fatalError("init(coder:) has not been implemented")
     }
     
+    @objc public func clearEvent() {
+        eventType = .applicationDefined // Ignored in RogueDriver
+        eventFlags = NSEvent.ModifierFlags.init()
+        eventCharacters = nil
+        eventLocationX = Int.max
+        eventLocationY = Int.max
+    }
+    
     public override func keyDown(with event: NSEvent) {
-        aEvent = event
+        clearEvent()
+        eventType = event.type
+        eventFlags = event.modifierFlags
+        eventCharacters = event.charactersIgnoringModifiers
     }
     
     public override func mouseDown(with event: NSEvent) {
-        aEvent = event
+        handleMouseEvent(event)
     }
     
     public override func mouseUp(with event: NSEvent) {
-        aEvent = event
+        handleMouseEvent(event)
     }
     
     public override func mouseMoved(with event: NSEvent) {
-        aEvent = event
+        handleMouseEvent(event)
+    }
+    
+    private func handleMouseEvent(_ event: NSEvent) {
+        clearEvent()
+        eventType = event.type
+        eventFlags = event.modifierFlags
+        let eventLocation = event.locationInWindow
+        let localPoint = mainView.convert(eventLocation, from: nil)
+        let frameRect = mainView.window?.contentRect(forFrameRect: mainView.window?.frame ?? NSRect.zero) ?? NSRect.zero
+        eventLocationX = Int((CGFloat(cols) * localPoint.x) / frameRect.size.width)
+        eventLocationY = Int(CGFloat(rows) - CGFloat(rows) * localPoint.y / frameRect.size.height)
+        
+        // Correct for the fact that truncation occurs in a positive direction when we're below zero:
+        if (localPoint.x < 0) {
+            eventLocationX -= 1
+        }
+        if (frameRect.size.height < localPoint.y) {
+            eventLocationY -= 1
+        }
     }
 }
 
